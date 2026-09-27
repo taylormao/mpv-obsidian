@@ -113,6 +113,14 @@ type: video-note
 - **截图没有字幕**：`screenshot_mode` 改成 `subtitles`（需要视频有字幕轨道）；不想要字幕改 `video`。
 - **截图模式对在线视频无效/失败**：部分流媒体不支持截图，属 mpv 本身限制。
 
+## 更新日志
+
+### 2026-09-27
+
+- **修复中文全角括号文件名导致 Obsidian 笔记创建 500**：`sanitize_title` 新增对中文全角括号（）、【】、｛｝、〔〕、〖〗、〈〉、《》的清理（替换为空格，保持标题可读），避免含全角括号的视频文件名在调用 Obsidian Local REST API 创建笔记时返回 500。
+- **500 自动重试**：`obsidian_request` 对 HTTP 500 响应自动延时 1 秒重试 1 次，缓解 Obsidian 插件瞬时故障导致的创建失败。
+- **清理标题末尾点号**：`sanitize_title` 清理标题末尾的点号（含点号前的空格），避免 Windows 文件名不允许以点号结尾导致笔记创建失败。
+
 ## Roadmap
 
 - 二期：思源笔记适配器（`createDocWithMd` / `appendBlock` / `asset/upload`）

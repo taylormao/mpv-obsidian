@@ -117,10 +117,16 @@ local RESERVED_NAMES = {
 local function sanitize_title(s)
     s = tostring(s or "")
     s = s:gsub("[\\/:\"<>|?*%c]", " ")
+    -- 中文全角括号等对 Obsidian 文档创建不友好的字符，替换为空格（逐字面量替换，避免 UTF-8 字节误匹配）
+    for _, ch in ipairs({ "（", "）", "【", "】", "｛", "｝", "〔", "〕", "〖", "〗", "〈", "〉", "《", "》" }) do
+        s = s:gsub(ch, " ")
+    end
     s = s:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+    -- Windows 文件名不允许以点号或空格结尾，清理标题末尾的点号（含点号前的空格）
+    s = s:gsub("%s*%.+$", "")
     if s == "" then s = "未命名视频" end
     if #s > opts.max_title_len then
-        s = s:sub(1, opts.max_title_len):gsub("%s+$", "")
+        s = s:sub(1, opts.max_title_len):gsub("%s*%.+$", "")
     end
     if RESERVED_NAMES[s:lower()] then s = s .. "_" end
     return s
@@ -235,39 +241,51 @@ end
 
 -- req: { body_file, content_type, need_body }
 local function obsidian_request(method, api_path, req, cb)
-    local out_file = temp_path(".body")
-    local args = { "-X", method, "-w", "%{http_code}", "-o", out_file }
-    args[#args + 1] = "-H"
-    args[#args + 1] = "Authorization: Bearer " .. opts.obsidian_api_key
-    if req.content_type then
-        args[#args + 1] = "-H"
-        args[#args + 1] = "Content-Type: " .. req.content_type
-    end
-    if req.accept then
-        args[#args + 1] = "-H"
-        args[#args + 1] = "Accept: " .. req.accept
-    end
-    if opts.obsidian_use_https and not opts.obsidian_verify_tls then
-        args[#args + 1] = "-k"
-    end
-    if req.body_file then
-        args[#args + 1] = "--data-binary"
-        args[#args + 1] = "@" .. req.body_file
-    end
-    args[#args + 1] = obsidian_url(api_path)
+    local attempts_left = 1
 
-    curl_run(args, function(res, err)
-        if not res then
-            cb(nil, nil, err)
-            return
+    local function do_request()
+        local out_file = temp_path(".body")
+        local args = { "-X", method, "-w", "%{http_code}", "-o", out_file }
+        args[#args + 1] = "-H"
+        args[#args + 1] = "Authorization: Bearer " .. opts.obsidian_api_key
+        if req.content_type then
+            args[#args + 1] = "-H"
+            args[#args + 1] = "Content-Type: " .. req.content_type
         end
-        local code = tonumber((res.stdout or ""):match("%d+"))
-        local body = nil
-        if req.need_body then body = read_file(out_file) end
-        os.remove(out_file)
-        local stderr = res.stderr or ""
-        cb(code, body, stderr ~= "" and stderr or nil)
-    end)
+        if req.accept then
+            args[#args + 1] = "-H"
+            args[#args + 1] = "Accept: " .. req.accept
+        end
+        if opts.obsidian_use_https and not opts.obsidian_verify_tls then
+            args[#args + 1] = "-k"
+        end
+        if req.body_file then
+            args[#args + 1] = "--data-binary"
+            args[#args + 1] = "@" .. req.body_file
+        end
+        args[#args + 1] = obsidian_url(api_path)
+
+        curl_run(args, function(res, err)
+            if not res then
+                cb(nil, nil, err)
+                return
+            end
+            local code = tonumber((res.stdout or ""):match("%d+"))
+            local body = nil
+            if req.need_body then body = read_file(out_file) end
+            os.remove(out_file)
+            local stderr = res.stderr or ""
+            if code == 500 and attempts_left > 0 then
+                attempts_left = attempts_left - 1
+                msg.warn("mpv-md: HTTP 500 响应，1 秒后重试 " .. method .. " " .. api_path)
+                mp.add_timeout(1.0, do_request)
+                return
+            end
+            cb(code, body, stderr ~= "" and stderr or nil)
+        end)
+    end
+
+    do_request()
 end
 
 ----------------------------------------------------------------------------
